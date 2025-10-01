@@ -113,7 +113,12 @@ validate_scripts() {
 }
 
 validate_file() {
-    if [[ ! -f "$FILE" ]]; then
+    if [[ "$RECURSION" == true ]]; then
+        if [[ ! -d "$FILE" ]]; then
+            log_error "Folder '$FILE' not found"
+            exit 1
+        fi
+    elif [[ ! -f "$FILE" ]]; then
         log_error "File '$FILE' not found"
         exit 1
     fi
@@ -185,6 +190,7 @@ parse_arguments() {
     FILE=""
     CUSTOM_PATH=""
     VERBOSE=false
+    RECURSION=false
     while [[ $# -gt 0 ]]; do
         case $1 in
             -al|--alias)
@@ -209,6 +215,10 @@ parse_arguments() {
                 ;;
             -v|--verbose)
                 VERBOSE=true
+                shift
+                ;;
+            -r)
+                RECURSION=true
                 shift
                 ;;
             -h|--help)
@@ -244,11 +254,20 @@ action_scp() {
     fi
     validate_file
     log_info "Copying '$FILE' to $USER@$HOST:$REMOTE_PATH"
-    if scp "$FILE" "$USER@$HOST:$REMOTE_PATH"; then
-        log_success "File copied successfully"
+    if [[ "$RECURSION" == true ]]; then
+        if scp -r "$FILE" "$USER@$HOST:$REMOTE_PATH"; then
+            log_success "File copied successfully"
+        else
+            log_error "SCP failed"
+            exit 1
+        fi
     else
-        log_error "SCP failed"
-        exit 1
+        if scp "$FILE" "$USER@$HOST:$REMOTE_PATH"; then
+            log_success "File copied successfully"
+        else
+            log_error "SCP failed"
+            exit 1
+        fi
     fi
 }
 
