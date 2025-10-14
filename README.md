@@ -42,38 +42,47 @@ declare -A scripts=(
 ```
 
 3. **Start using it:**
-#### Show available servers and scripts ####
+#### Show available servers and scripts
 ```
 ./meng.sh --list 
 ```
-#### Connect to server ####
+#### Show alias information
+```
+./meng.sh --alias myserver --action echo 
+```
+#### Connect to server
 ```
 ./meng.sh --alias myserver --action ssh  
 ```
-#### Run script ####
+#### Run script
 ```
 ./meng.sh --script backup --action run  
 ```
-#### Send file to server ####
+#### Send file to server
 ```
 ./meng.sh --alias myserver --action scp -file myapp
 ```
-#### Build and deploy #### 
+#### Send folder to server
+```
+./meng.sh --alias myserver --action scp -r -file myapp/
+```
+#### Build and deploy 
 ```
 ./meng.sh --alias myserver --action deploy
 ```
-#### Overwrite alias path ####
+#### Overwrite alias path
 ```
 ./meng.sh --alias myserver --action scp --file myapp --path /home/myuser/
 ```
-#### Append to the alias path ####
+#### Append to the alias path
 ```
 ./meng.sh --alias myserver --action scp --file myapp --path folder/subfolder
 ```
 
-4. **(Optional) make meng.sh available globally**
-```
-sudo cp meng.sh /usr/local/bin/meng
-sudo chmod +x /usr/local/bin/meng
-```
-Now you can call eg; `meng -list` from anywhere :)
+> [!TIP]
+> **Make meng.sh available globally**
+> ```
+> sudo cp meng.sh /usr/local/bin/meng
+> sudo chmod +x /usr/local/bin/meng
+> ```
+> Now you can call eg; `meng -list` from anywhere :)

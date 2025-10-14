@@ -276,6 +276,13 @@ action_ssh() {
     ssh "$USER@$HOST"
 }
 
+action_echo() {
+    log_info "Parsed alias '$ALIAS':"
+    echo " User: $USER"
+    echo " Host: $HOST"
+    echo " Remote Path: $REMOTE_PATH" 
+}
+
 action_deploy() {
     if [ -z "${FILE}" ]; then
         FILE="$DEFAULT_FILE"
@@ -330,6 +337,10 @@ main(){
         deploy)
             parse_alias
             action_deploy
+            ;;
+        echo)
+            parse_alias
+            action_echo
             ;;
         run)
             parse_script
