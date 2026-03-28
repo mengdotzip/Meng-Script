@@ -7,7 +7,6 @@ A small script I built to stop retyping the same ssh/scp commands all day.
 ```bash
 git clone https://github.com/mengdotzip/Meng-Script.git
 cd Meng-Script
-chmod +x meng.sh
 ```
 
 To use it from anywhere without the `./`:

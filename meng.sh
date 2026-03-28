@@ -74,6 +74,7 @@ ${YELLOW}SCRIPTS:${NC}
 ${YELLOW}ALIAS MANAGEMENT:${NC}
   ${GREEN}add${NC}    <name> <user@host:/path>     Add a server alias
   ${GREEN}remove${NC} <name>                       Remove a server alias
+  ${GREEN}edit${NC}   [aliases|scripts]            Edit a server alias or script
   ${GREEN}ingest${NC} <name> [ssh] <user@host>     Parse SSH string into alias
   ${GREEN}list${NC}                                List all aliases and scripts
 
@@ -313,6 +314,21 @@ cmd_remove() {
     log_success "Removed alias '$name'"
 }
 
+cmd_edit() {
+    local target="${1:-aliases}"
+    local editor="${EDITOR:-nano}"
+
+    case "$target" in
+        aliases) "$editor" "$ALIASES_FILE" ;;
+        scripts) "$editor" "$SCRIPTS_FILE" ;;
+        *)
+            log_error "Unknown target '$target'"
+            log_info "Usage: meng edit [aliases|scripts]"
+            exit 1
+            ;;
+    esac
+}
+
 cmd_ingest() {
     # Primary use: bash !! expansion
     #   ssh admin@10.0.0.1
@@ -371,6 +387,7 @@ main() {
         script)            cmd_script "$@" ;;
         add)               cmd_add    "$@" ;;
         remove)            cmd_remove "$@" ;;
+        edit)              cmd_edit   "$@" ;;
         ingest)            cmd_ingest "$@" ;;
         list)              list_all ;;
         help|-h|--help)    usage ;;
