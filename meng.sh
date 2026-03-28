@@ -3,352 +3,387 @@ set -euo pipefail
 
 # ============================================================================
 # MENG - Server Management Script
-# A unified interface for deployment, SSH, and server management
 # ============================================================================
 
-# ###### #
-# CONFIG #
-# ###### #
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/meng"
+readonly ALIASES_FILE="$CONFIG_DIR/aliases"
+readonly SCRIPTS_FILE="$CONFIG_DIR/scripts"
 
-# DEFINE YOUR ALIASES HERE
-declare -A aliases=(
-[myserver]="user@192.168.1.100:/path/to/deploy/"
-[staging]="deploy@staging.company.com:/var/www/"
-[production]="admin@prod.company.com:/opt/apps/"
-)
-##########
+readonly RED=$'\033[0;31m'
+readonly GREEN=$'\033[0;32m'
+readonly YELLOW=$'\033[1;33m'
+readonly BLUE=$'\033[0;34m'
+readonly NC=$'\033[0m'
 
-# DEFINE SCRIPT ALIASES HERE
-declare -A scripts=(
-[backup]="/home/user/scripts/rclone_backup.sh"
-)
-##########
+readonly DEFAULT_FILE=""
+readonly VERSION="0.3.0"
 
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly NC='\033[0m' # No Color
-
-#vars
-readonly DEFAULT_FILE="" #If you dont set -file it will default to this file, very handy for testing
-readonly VERSION="0.1.3"
+log_info()    { echo -e "${BLUE}i${NC} $1"; }
+log_success() { echo -e "${GREEN}✓${NC} $1"; }
+log_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+log_error()   { echo -e "${RED}✗${NC} $1" >&2; }
 
 # ################# #
 # UTILITY FUNCTIONS #
 # ################# #
 
-log_info() {
-echo -e "${BLUE}i${NC} $1"
+ensure_config_dir() {
+    [[ -d "$CONFIG_DIR" ]] && return 0
+    mkdir -p "$CONFIG_DIR"
+    touch "$ALIASES_FILE" "$SCRIPTS_FILE"
+    log_info "Created config directory: $CONFIG_DIR"
 }
-log_success() {
-echo -e "${GREEN}✓${NC} $1"
-}
-log_warning() {
-echo -e "${YELLOW}⚠${NC} $1"
-}
-log_error() {
-echo -e "${RED}✗${NC} $1" >&2
+
+load_config() {
+    declare -gA aliases=()
+    declare -gA scripts=()
+    local key value line
+
+    if [[ -f "$ALIASES_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            key="${line%%=*}"; value="${line#*=}"
+            aliases["$key"]="$value"
+        done < "$ALIASES_FILE"
+    fi
+
+    if [[ -f "$SCRIPTS_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            key="${line%%=*}"; value="${line#*=}"
+            scripts["$key"]="$value"
+        done < "$SCRIPTS_FILE"
+    fi
 }
 
 usage() {
-    printf "%b\n" \
-    "${BLUE}MENG${NC} - Server Management Script v${VERSION}" \
-    "${YELLOW}USAGE:${NC}" \
-    "$0 --alias <alias> -action <action> [--file <filename>] [options]" \
-    "$0 --script <alias> -action <action>" \
-    "${YELLOW}ACTIONS:${NC}" \
-    "${GREEN}scp${NC} Copy file to server" \
-    "${GREEN}ssh${NC} Connect to server via SSH" \
-    "${GREEN}deploy${NC} Build (if needed) and deploy file" \
-    "${GREEN}run${NC} Run a script alias" \
-    "${YELLOW}OPTIONS:${NC}" \
-    "-al, --alias <name> Server alias (required for most actions)" \
-    "-s,  --script <name> Script alias" \
-    "-ac, --action <action> Action to perform (required for most actions)" \
-    "-f,  --file <filename> File to copy/deploy (required for scp/deploy)" \
-    "-p,  --path <path> Overwrite or append the path thats defined in the alias" \
-    "-l,  --list List all scripts and aliases" \
-    "-v,  --verbose Enable verbose output" \
-    "-h,  --help Show this help message" \
-    "--version Show version information" \
-    "${YELLOW}EXAMPLES:${NC}" \
-    "$0 --alias ubproxy --action ssh" \
-    "$0 --alias ubproxy --action deploy --file mazarin" \
-    "$0 --script backup --action run" \
-    "$0 --list" 
+    cat <<EOF
+${BLUE}MENG${NC} v${VERSION} — Server Management Script
+
+${YELLOW}SERVER:${NC}
+  ${GREEN}ssh${NC}    <alias>                      Connect via SSH
+  ${GREEN}scp${NC}    <alias> <file> [-r] [-p]     Copy file/folder to server
+  ${GREEN}deploy${NC} <alias> <file>               Build (go build) and deploy
+  ${GREEN}info${NC}   <alias>                      Show alias details
+
+${YELLOW}SCRIPTS:${NC}
+  ${GREEN}run${NC}           <name>                Run a script alias
+  ${GREEN}script add${NC}    <name> <path>         Add a script alias
+  ${GREEN}script remove${NC} <name>                Remove a script alias
+
+${YELLOW}ALIAS MANAGEMENT:${NC}
+  ${GREEN}add${NC}    <name> <user@host:/path>     Add a server alias
+  ${GREEN}remove${NC} <name>                       Remove a server alias
+  ${GREEN}ingest${NC} <name> [ssh] <user@host>     Parse SSH string into alias
+  ${GREEN}list${NC}                                List all aliases and scripts
+
+${YELLOW}SCP FLAGS:${NC}
+  -r           Recursive (directories)
+  -p <path>    Overwrite or append remote path
+
+${YELLOW}EXAMPLES:${NC}
+  meng add prod admin@10.0.0.1:/opt/app/
+  meng ingest prod !!                    # after: ssh admin@10.0.0.1
+  meng ssh prod
+  meng scp prod build/myapp
+  meng scp prod -r dist/
+  meng scp prod myapp -p /tmp/
+  meng deploy prod myapp
+  meng run backup
+  meng script add backup ~/scripts/backup.sh
+  meng list
+EOF
 }
 
 show_version() {
     echo "MENG v${VERSION}"
-    echo "Server Management Script"
-}
-
-build_go() {
-    if go build -o "$FILE"; then
-        log_success "Build completed successfully"
-    else
-        log_error "Build failed"
-        exit 1
-    fi
-}
-
-validate_alias() {
-    if [[ -z "${aliases[$ALIAS]+_}" ]]; then
-        log_error "Unknown alias '$ALIAS'"
-        log_info "Available aliases:"
-        list_aliases
-        exit 1
-    fi
-}
-
-validate_scripts() {
-    if [[ -z "${scripts[$SCRIPT_AL]+_}" ]]; then
-        log_error "Unknown script '$SCRIPT_AL'"
-        log_info "Available aliases:"
-        list_scripts
-        exit 1
-    fi
-}
-
-validate_file() {
-    if [[ "$RECURSION" == true ]]; then
-        if [[ ! -d "$FILE" ]]; then
-            log_error "Folder '$FILE' not found"
-            exit 1
-        fi
-    elif [[ ! -f "$FILE" ]]; then
-        log_error "File '$FILE' not found"
-        exit 1
-    fi
-}
-
-list_scripts() {
-    echo -e "${YELLOW}Available server scripts:${NC}"
-    for script in "${!scripts[@]}"; do
-        local alias_info="${scripts[$script]}"
-        echo -e " ${GREEN}$script${NC} -> $alias_info"
-    done
-}
-
-list_aliases() {
-    echo -e "${YELLOW}Available server aliases:${NC}"
-    for alias in "${!aliases[@]}"; do
-        local alias_info="${aliases[$alias]}"
-        local user_host="${alias_info%%:*}"
-        local path="${alias_info#*:}"
-        echo -e " ${GREEN}$alias${NC} -> $user_host:$path"
-    done
+    echo "Config: $CONFIG_DIR"
 }
 
 # ########## #
-# MAIN LOGIC #
+# CONFIG I/O #
 # ########## #
 
-parse_script() {
-    validate_scripts
-
-    SCRIPT_TORUN="${scripts[$SCRIPT_AL]}"
-
-    if [[ "$VERBOSE" == true ]]; then
-        log_info "Parsed script '$SCRIPT_TORUN':"
-    fi
+write_entry() {
+    local file="$1" name="$2" value="$3"
+    local tmpfile; tmpfile=$(mktemp)
+    grep -v "^${name}=" "$file" > "$tmpfile" 2>/dev/null || true
+    echo "${name}=${value}" >> "$tmpfile"
+    mv "$tmpfile" "$file"
 }
 
-parse_alias() {
-    validate_alias
-
-    local alias_full="${aliases[$ALIAS]}"
-    USER_HOST="${alias_full%%:*}"  # %%:* = "Remove the longest match of :* from the end"
-    REMOTE_PATH="${alias_full#*:}" # #*: = "Remove the shortest match of *: from the beginning"
-    USER="${USER_HOST%@*}"         # %@* = "Remove the shortest match of @* from the end"
-    HOST="${USER_HOST#*@}"         # #*@ = "Remove the shortest match of *@ from the beginning"
-
-    if [[ -n "${CUSTOM_PATH}" ]]; then
-        if [[ "${CUSTOM_PATH:0:1}" == "/" ]]; then
-            REMOTE_PATH="$CUSTOM_PATH"  
-            log_info "Using absolute path: $REMOTE_PATH"
-        else
-            REMOTE_PATH="${REMOTE_PATH}$CUSTOM_PATH"
-            log_info "Appending to alias path: $REMOTE_PATH"
-        fi
+remove_entry() {
+    local file="$1" name="$2"
+    if ! grep -q "^${name}=" "$file" 2>/dev/null; then
+        log_error "Entry '$name' not found"
+        exit 1
     fi
-
-    if [[ "$VERBOSE" == true ]]; then
-        log_info "Parsed alias '$ALIAS':"
-        echo " User: $USER"
-        echo " Host: $HOST"
-        echo " Remote Path: $REMOTE_PATH"
-    fi
+    local tmpfile; tmpfile=$(mktemp)
+    grep -v "^${name}=" "$file" > "$tmpfile" 2>/dev/null || true
+    mv "$tmpfile" "$file"
 }
 
-parse_arguments() {
-    SCRIPT_AL=""
-    ALIAS=""
-    ACTION=""
-    FILE=""
-    CUSTOM_PATH=""
-    VERBOSE=false
-    RECURSION=false
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -al|--alias)
-                ALIAS="$2"
-                shift 2
-                ;;
-            -s|--script)
-                SCRIPT_AL="$2"
-                shift 2
-                ;;
-            -ac|--action)
-                ACTION="$2"
-                shift 2
-                ;;
-            -f|--file)
-                FILE="$2"
-                shift 2
-                ;;
-            -p|--path)
-                CUSTOM_PATH="$2"
-                shift 2
-                ;;
-            -v|--verbose)
-                VERBOSE=true
-                shift
-                ;;
-            -r)
-                RECURSION=true
-                shift
-                ;;
-            -h|--help)
-                usage
-                exit 0
-                ;;
-            -l|--list)
-                list_scripts
-                list_aliases
-                exit 0
-                ;;
-            --version)
-                show_version
-                exit 0
-                ;;
-            *)
-                log_error "Unknown option: $1"
-                usage
-                exit 1
-                ;;
-        esac
-    done
+# ############ #
+# ALIAS LOOKUP #
+# ############ #
+
+resolve_alias() {
+    local name="$1"
+    if [[ -z "${aliases[$name]+_}" ]]; then
+        log_error "Unknown alias '$name'"
+        log_info "Run 'meng list' to see available aliases"
+        exit 1
+    fi
+    local full="${aliases[$name]}"
+    ALIAS="$name"
+    USER_HOST="${full%%:*}"
+    REMOTE_PATH="${full#*:}"
+    USER="${USER_HOST%@*}"
+    HOST="${USER_HOST#*@}"
 }
 
-# ####### #
-# ACTIONS #
-# ####### #
-
-action_scp() {
-    if [ -z "${FILE}" ]; then
-        FILE="$DEFAULT_FILE"
-        log_warning "No file specified for scp, using DEFAULT_FILE fallback: $DEFAULT_FILE"
+resolve_script() {
+    local name="$1"
+    if [[ -z "${scripts[$name]+_}" ]]; then
+        log_error "Unknown script '$name'"
+        log_info "Run 'meng list' to see available scripts"
+        exit 1
     fi
-    validate_file
-    log_info "Copying '$FILE' to $USER@$HOST:$REMOTE_PATH"
-    if [[ "$RECURSION" == true ]]; then
-        if scp -r "$FILE" "$USER@$HOST:$REMOTE_PATH"; then
-            log_success "File copied successfully"
-        else
-            log_error "SCP failed"
-            exit 1
-        fi
+    SCRIPT_PATH="${scripts[$name]}"
+}
+
+list_all() {
+    echo -e "${YELLOW}Server aliases:${NC}"
+    if [[ ${#aliases[@]} -eq 0 ]]; then
+        echo -e "  ${BLUE}(none)${NC} — add with: meng add <name> <user@host:/path>"
     else
-        if scp "$FILE" "$USER@$HOST:$REMOTE_PATH"; then
-            log_success "File copied successfully"
-        else
-            log_error "SCP failed"
-            exit 1
-        fi
+        for name in "${!aliases[@]}"; do
+            echo -e "  ${GREEN}${name}${NC} -> ${aliases[$name]}"
+        done
+    fi
+    echo
+    echo -e "${YELLOW}Script aliases:${NC}"
+    if [[ ${#scripts[@]} -eq 0 ]]; then
+        echo -e "  ${BLUE}(none)${NC} — add with: meng script add <name> <path>"
+    else
+        for name in "${!scripts[@]}"; do
+            echo -e "  ${GREEN}${name}${NC} -> ${scripts[$name]}"
+        done
     fi
 }
 
-action_ssh() {
+# ########### #
+# SERVER CMDS #
+# ########### #
+
+cmd_ssh() {
+    local alias_name="${1:?Usage: meng ssh <alias>}"
+    resolve_alias "$alias_name"
     log_info "Connecting to $USER@$HOST..."
     ssh "$USER@$HOST"
 }
 
-action_echo() {
-    log_info "Parsed alias '$ALIAS':"
-    echo " User: $USER"
-    echo " Host: $HOST"
-    echo " Remote Path: $REMOTE_PATH" 
+cmd_scp() {
+    local alias_name="${1:?Usage: meng scp <alias> <file>}"
+    local file="${2:?Usage: meng scp <alias> <file>}"
+    resolve_alias "$alias_name"
+    shift 2
+
+    local recursion=false custom_path=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -r)        recursion=true; shift ;;
+            -p|--path) custom_path="$2"; shift 2 ;;
+            *)         log_error "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+
+    if [[ -n "$custom_path" ]]; then
+        if [[ "${custom_path:0:1}" == "/" ]]; then
+            REMOTE_PATH="$custom_path"
+        else
+            REMOTE_PATH="${REMOTE_PATH}${custom_path}"
+        fi
+        log_info "Remote path: $REMOTE_PATH"
+    fi
+
+    if [[ "$recursion" == true ]]; then
+        [[ ! -d "$file" ]] && { log_error "Folder '$file' not found"; exit 1; }
+    else
+        [[ ! -f "$file" ]] && { log_error "File '$file' not found"; exit 1; }
+    fi
+
+    log_info "Copying '$file' -> $USER@$HOST:$REMOTE_PATH"
+    local scp_opts=()
+    [[ "$recursion" == true ]] && scp_opts+=(-r)
+    if scp "${scp_opts[@]}" "$file" "$USER@$HOST:$REMOTE_PATH"; then
+        log_success "Copied successfully"
+    else
+        log_error "SCP failed"; exit 1
+    fi
 }
 
-action_deploy() {
-    if [ -z "${FILE}" ]; then
-        FILE="$DEFAULT_FILE"
-        log_warning "No file specified for scp, using DEFAULT_FILE fallback: $DEFAULT_FILE"
-    fi
-    build_go
-    log_info "Deploying '$FILE' to $ALIAS ($USER@$HOST)"
-    if scp "$FILE" "$USER@$HOST:$REMOTE_PATH"; then
-        log_success "Deployment completed successfully! "
-    else
-        log_error "Deployment failed"
+cmd_deploy() {
+    local alias_name="${1:?Usage: meng deploy <alias> <file>}"
+    local file="${2:-$DEFAULT_FILE}"
+    resolve_alias "$alias_name"
+
+    if [[ -z "$file" ]]; then
+        log_error "No file specified and DEFAULT_FILE is not set"
         exit 1
     fi
+
+    log_info "Building '$file'..."
+    if ! go build -o "$file"; then
+        log_error "Build failed"; exit 1
+    fi
+    log_success "Build completed"
+
+    log_info "Deploying '$file' -> $alias_name ($USER@$HOST:$REMOTE_PATH)"
+    if scp "$file" "$USER@$HOST:$REMOTE_PATH"; then
+        log_success "Deployed!"
+    else
+        log_error "Deployment failed"; exit 1
+    fi
 }
 
-action_run() {
-    log_info "Running script alias $SCRIPT_AL"
-    sh "$SCRIPT_TORUN"
-    log_success "Script ran"
+cmd_info() {
+    local alias_name="${1:?Usage: meng info <alias>}"
+    resolve_alias "$alias_name"
+    echo -e "${YELLOW}Alias:${NC} $alias_name"
+    echo "  User:   $USER"
+    echo "  Host:   $HOST"
+    echo "  Path:   $REMOTE_PATH"
 }
 
+# ########### #
+# SCRIPT CMDS #
+# ########### #
+
+cmd_run() {
+    local name="${1:?Usage: meng run <script>}"
+    resolve_script "$name"
+    log_info "Running '$name'..."
+    sh "$SCRIPT_PATH"
+    log_success "Script completed"
+}
+
+cmd_script() {
+    local subcmd="${1:?Usage: meng script <add|remove> ...}"
+    shift
+    case "$subcmd" in
+        add)
+            local name="${1:?Usage: meng script add <name> <path>}"
+            local path="${2:?Usage: meng script add <name> <path>}"
+            [[ ! -f "$path" ]] && log_warning "Script '$path' does not exist yet (adding anyway)"
+            write_entry "$SCRIPTS_FILE" "$name" "$path"
+            log_success "Script '$name' -> $path"
+            ;;
+        remove)
+            local name="${1:?Usage: meng script remove <name>}"
+            remove_entry "$SCRIPTS_FILE" "$name"
+            log_success "Removed script '$name'"
+            ;;
+        *)
+            log_error "Unknown: meng script $subcmd"
+            log_info "Usage: meng script <add|remove>"
+            exit 1
+            ;;
+    esac
+}
+
+# ################ #
+# ALIAS MANAGEMENT #
+# ################ #
+
+cmd_add() {
+    local name="${1:?Usage: meng add <name> <user@host:/path>}"
+    local target="${2:?Usage: meng add <name> <user@host:/path>}"
+    if [[ ! "$target" =~ .+@.+: ]]; then
+        log_error "Invalid format. Expected: user@host:/path (e.g. admin@10.0.0.1:/opt/app/)"
+        exit 1
+    fi
+    write_entry "$ALIASES_FILE" "$name" "$target"
+    log_success "Added '$name' -> $target"
+}
+
+cmd_remove() {
+    local name="${1:?Usage: meng remove <name>}"
+    remove_entry "$ALIASES_FILE" "$name"
+    log_success "Removed alias '$name'"
+}
+
+cmd_ingest() {
+    # Primary use: bash !! expansion
+    #   ssh admin@10.0.0.1
+    #   meng ingest prod !!   →   meng ingest prod ssh admin@10.0.0.1
+    local alias_name="${1:?Usage: meng ingest <name> [ssh] <user@host[:/path]>}"
+    shift
+
+    [[ "${1:-}" == "ssh" ]] && shift
+
+    # Strip SSH flags (-p 22, -i keyfile, etc.)
+    local connection=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|-i|-l|-o|-J|-b|-c|-D|-E|-F|-I|-L|-m|-Q|-R|-S|-w|-W) shift 2 ;;
+            -*) shift ;;
+            *) connection="$1"; break ;;
+        esac
+    done
+
+    [[ -z "$connection" ]] && { log_error "No host found in command"; exit 1; }
+
+    local user_host path
+    if [[ "$connection" == *:* ]]; then
+        user_host="${connection%%:*}"; path="${connection#*:}"
+    else
+        user_host="$connection"; path="~/"
+    fi
+
+    if [[ "$user_host" != *@* ]]; then
+        log_info "No user specified, defaulting to: $USER"
+        user_host="${USER}@${user_host}"
+    fi
+
+    write_entry "$ALIASES_FILE" "$alias_name" "${user_host}:${path}"
+    log_success "Ingested '$alias_name' -> ${user_host}:${path}"
+    log_info "Connect with: meng ssh $alias_name"
+}
 
 # ############## #
 # MAIN EXECUTION #
 # ############## #
 
-main(){
-    parse_arguments "$@"
+main() {
+    ensure_config_dir
+    load_config
 
-    # Validate required arguments
-    if [[ -z "$ACTION" ]]; then
-        log_error "Action is required"
-        usage
-        exit 1
-    fi
+    local cmd="${1:-}"
+    [[ $# -gt 0 ]] && shift
 
-    if [[ -z "$ALIAS" && -z "$SCRIPT_AL" ]]; then
-        log_error "Alias is required for action '$ACTION'"
-        usage
-        exit 1
-    fi
-
-    case $ACTION in
-        ssh)
-            parse_alias
-            action_ssh
-            ;;
-        scp)
-            parse_alias
-            action_scp
-            ;;
-        deploy)
-            parse_alias
-            action_deploy
-            ;;
-        echo)
-            parse_alias
-            action_echo
-            ;;
-        run)
-            parse_script
-            action_run
+    case "$cmd" in
+        ssh)               cmd_ssh    "$@" ;;
+        scp)               cmd_scp    "$@" ;;
+        deploy)            cmd_deploy "$@" ;;
+        info)              cmd_info   "$@" ;;
+        run)               cmd_run    "$@" ;;
+        script)            cmd_script "$@" ;;
+        add)               cmd_add    "$@" ;;
+        remove)            cmd_remove "$@" ;;
+        ingest)            cmd_ingest "$@" ;;
+        list)              list_all ;;
+        help|-h|--help)    usage ;;
+        version|--version) show_version ;;
+        "")
+            log_error "No command provided"
+            echo
+            usage
+            exit 1
             ;;
         *)
-            log_error "Unknown action: $ACTION"
-            usage
+            log_error "Unknown command: '$cmd'"
+            log_info "Run 'meng help' for usage"
             exit 1
             ;;
     esac

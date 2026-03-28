@@ -1,88 +1,81 @@
-# MENG - Server Management Script
+# meng
 
-A unified bash script for deployment, SSH connections, and server management. Built to eliminate repetitive `scp` and `ssh` commands with a clean, reliable interface.
+A small script I built to stop retyping the same ssh/scp commands all day.
 
-## Why MENG?
+## Setup
 
-**The Problem:** Constantly typing long deployment commands like:
-```
-go build -o myapp
-scp myapp user@192.168.1.100:/home/user/apps/
-ssh user@192.168.1.100
-```
-
-**The Solution:** One simple command that handles building, copying, and connecting:
-
-```
-./meng.sh -alias myserver -action deploy
-```
-
-## Quick Start
-
-1. **Clone and make executable:**
-```
-git clone https://github.com/Maty-0/Meng-Script.git
+```bash
+git clone https://github.com/mengdotzip/Meng-Script.git
 cd Meng-Script
 chmod +x meng.sh
 ```
 
-2. **Configure your servers** by editing the aliases section in `meng.sh`:
-```
-declare -A aliases=(
-[myserver]="user@192.168.1.100:/path/to/deploy/"
-[staging]="deploy@staging.company.com:/var/www/"
-[production]="admin@prod.company.com:/opt/apps/"
-)
-```
-You can also define scripts aliases here: 
-```
-declare -A scripts=(
-[backup]="/home/user/scripts/rclone_backup.sh"
-)
+To use it from anywhere without the `./`:
+
+```bash
+mkdir -p ~/.local/bin
+cp meng.sh ~/.local/bin/meng
 ```
 
-3. **Start using it:**
-#### Show available servers and scripts
-```
-./meng.sh --list 
-```
-#### Show alias information
-```
-./meng.sh --alias myserver --action echo 
-```
-#### Connect to server
-```
-./meng.sh --alias myserver --action ssh  
-```
-#### Run script
-```
-./meng.sh --script backup --action run  
-```
-#### Send file to server
-```
-./meng.sh --alias myserver --action scp -file myapp
-```
-#### Send folder to server
-```
-./meng.sh --alias myserver --action scp -r -file myapp/
-```
-#### Build and deploy 
-```
-./meng.sh --alias myserver --action deploy
-```
-#### Overwrite alias path
-```
-./meng.sh --alias myserver --action scp --file myapp --path /home/myuser/
-```
-#### Append to the alias path
-```
-./meng.sh --alias myserver --action scp --file myapp --path folder/subfolder
+If `~/.local/bin` isn't in your PATH yet, add this to your `.bashrc` or `.zshrc`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-> [!TIP]
-> **Make meng.sh available globally**
-> ```
-> sudo cp meng.sh /usr/local/bin/meng
-> sudo chmod +x /usr/local/bin/meng
-> ```
-> Now you can call eg; `meng -list` from anywhere :)
+## Usage
+
+```bash
+# save a server
+meng add prod admin@192.168.1.100:/opt/app/
+
+# or just SSH in normally, then save it after
+ssh admin@192.168.1.100
+meng ingest prod !!
+
+# connect / copy / deploy
+meng ssh    prod
+meng scp    prod build/myapp
+meng scp    prod dist/ -r
+meng deploy prod myapp
+
+# scripts
+meng script add backup ~/scripts/rclone_backup.sh
+meng run backup
+
+# see everything
+meng list
+```
+
+## Config
+
+Everything lives in `~/.config/meng/` — created automatically on first run.
+
+~/.config/meng/
+├── aliases # your servers
+└── scripts # your script shortcuts
+
+
+Plain text, one entry per line. Worth backing up or sticking in a dotfiles repo.
+
+```
+## All commands
+
+meng ssh <alias>
+meng scp <alias> <file> [-r] [-p <path>]
+meng deploy <alias> <file>
+meng info <alias>
+
+meng add <name> <user@host:/path>
+meng remove <name>
+meng ingest <name> [ssh] <user@host>
+meng list
+
+meng run <name>
+meng script add <name> <path>
+meng script remove <name>
+
+
+> `-p` with a leading `/` replaces the alias path entirely, without one it appends to it.
+> `deploy` assumes a Go project and runs `go build` first.
+```
