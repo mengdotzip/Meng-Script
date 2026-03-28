@@ -50,17 +50,16 @@ meng list
 ## Config
 
 Everything lives in `~/.config/meng/` — created automatically on first run.
-
+```
 ~/.config/meng/
 ├── aliases # your servers
 └── scripts # your script shortcuts
-
-
+```
 Plain text, one entry per line. Worth backing up or sticking in a dotfiles repo.
 
-```
-## All commands
 
+## All commands
+```
 meng ssh <alias>
 meng scp <alias> <file> [-r] [-p <path>]
 meng deploy <alias> <file>
@@ -75,7 +74,6 @@ meng run <name>
 meng script add <name> <path>
 meng script remove <name>
 
-
+```
 > `-p` with a leading `/` replaces the alias path entirely, without one it appends to it.
 > `deploy` assumes a Go project and runs `go build` first.
-```
