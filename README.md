@@ -22,6 +22,36 @@ If `~/.local/bin` isn't in your PATH yet, add this to your `.bashrc` or `.zshrc`
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+**Tab completion**
+
+* bash
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+cp meng-completion.bash ~/.local/share/bash-completion/completions/meng
+source ~/.local/share/bash-completion/completions/meng
+```
+
+* zsh
+
+```bash
+mkdir -p ~/.local/share/zsh/site-functions
+cp _meng ~/.local/share/zsh/site-functions/_meng
+```
+
+Add to `~/.zshrc` if not already there:
+
+```bash
+fpath=(~/.local/share/zsh/site-functions $fpath)
+autoload -Uz compinit && compinit
+```
+
+Reload without restarting your shell:
+
+```bash
+unfunction _meng 2>/dev/null; autoload -Uz _meng
+```
+
 ## Usage
 
 ```bash

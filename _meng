@@ -1,0 +1,67 @@
+#compdef meng
+
+_meng() {
+    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/meng"
+    local -a aliases=() scripts=()
+    local line
+
+    if [[ -f "$config_dir/aliases" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            aliases+=("${line%%=*}")
+        done < "$config_dir/aliases"
+    fi
+
+    if [[ -f "$config_dir/scripts" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            scripts+=("${line%%=*}")
+        done < "$config_dir/scripts"
+    fi
+
+    local cmd="${words[2]}"
+
+    if (( CURRENT == 2 )); then
+        local -a cmds=(
+            'ssh:Connect to a server'
+            'scp:Copy file or folder to server'
+            'deploy:Build and deploy'
+            'info:Show alias details'
+            'run:Run a script alias'
+            'script:Manage script aliases'
+            'add:Add a server alias'
+            'remove:Remove a server alias'
+            'ingest:Parse SSH string into alias'
+            'list:List all aliases and scripts'
+            'help:Show help'
+            'version:Show version'
+        )
+        _describe 'command' cmds
+        return
+    fi
+
+    case $cmd in
+        ssh|info|remove)
+            (( CURRENT == 3 )) && compadd -a aliases
+            ;;
+        scp|deploy)
+            case $CURRENT in
+                3) compadd -a aliases ;;
+                4) _files ;;
+                *) compadd -- -r -p ;;
+            esac
+            ;;
+        run)
+            (( CURRENT == 3 )) && compadd -a scripts
+            ;;
+        script)
+            case $CURRENT in
+                3) compadd -- add remove ;;
+                4) [[ $words[3] == 'remove' ]] && compadd -a scripts ;;
+                5) [[ $words[3] == 'add'    ]] && _files ;;
+            esac
+            ;;
+    esac
+}
+
+_meng "$@"
