@@ -32,6 +32,11 @@ _meng_completions() {
         ssh|info|remove)
             [[ $cword -eq 2 ]] && COMPREPLY=($(compgen -W "${aliases[*]}" -- "$cur"))
             ;;
+        add)
+            case $cword in
+                3) COMPREPLY=($(compgen -W "-p" -- "$cur")) ;;
+            esac
+            ;;
         scp|deploy)
             case $cword in
                 2) COMPREPLY=($(compgen -W "${aliases[*]}" -- "$cur")) ;;

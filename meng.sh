@@ -16,7 +16,7 @@ readonly BLUE=$'\033[0;34m'
 readonly NC=$'\033[0m'
 
 readonly DEFAULT_FILE=""
-readonly VERSION="0.3.0"
+readonly VERSION="0.4.0"
 
 log_info()    { echo -e "${BLUE}i${NC} $1"; }
 log_success() { echo -e "${GREEN}✓${NC} $1"; }
@@ -72,11 +72,11 @@ ${YELLOW}SCRIPTS:${NC}
   ${GREEN}script remove${NC} <name>                Remove a script alias
 
 ${YELLOW}ALIAS MANAGEMENT:${NC}
-  ${GREEN}add${NC}    <name> <user@host:/path>     Add a server alias
-  ${GREEN}remove${NC} <name>                       Remove a server alias
-  ${GREEN}edit${NC}   [aliases|scripts]            Edit a server alias or script
-  ${GREEN}ingest${NC} <name> [ssh] <user@host>     Parse SSH string into alias
-  ${GREEN}list${NC}                                List all aliases and scripts
+  ${GREEN}add${NC}    <name> <user@host:/path> [-p <port>]  Add a server alias
+  ${GREEN}remove${NC} <name>                               Remove a server alias
+  ${GREEN}edit${NC}   [aliases|scripts]                    Edit a server alias or script
+  ${GREEN}ingest${NC} <name> [ssh] <user@host>             Parse SSH string into alias
+  ${GREEN}list${NC}                                        List all aliases and scripts
 
 ${YELLOW}SCP FLAGS:${NC}
   -r           Recursive (directories)
@@ -84,7 +84,9 @@ ${YELLOW}SCP FLAGS:${NC}
 
 ${YELLOW}EXAMPLES:${NC}
   meng add prod admin@10.0.0.1:/opt/app/
+  meng add staging admin@10.0.0.1:/opt/app/ -p 2222
   meng ingest prod !!                    # after: ssh admin@10.0.0.1
+  meng ingest staging !!                 # after: ssh -p 2222 admin@10.0.0.1
   meng ssh prod
   meng scp prod build/myapp
   meng scp prod -r dist/
@@ -136,6 +138,11 @@ resolve_alias() {
         exit 1
     fi
     local full="${aliases[$name]}"
+    PORT=""
+    if [[ "$full" == *"|"* ]]; then
+        PORT="${full##*|}"
+        full="${full%|*}"
+    fi
     ALIAS="$name"
     USER_HOST="${full%%:*}"
     REMOTE_PATH="${full#*:}"
@@ -159,7 +166,12 @@ list_all() {
         echo -e "  ${BLUE}(none)${NC} — add with: meng add <name> <user@host:/path>"
     else
         for name in "${!aliases[@]}"; do
-            echo -e "  ${GREEN}${name}${NC} -> ${aliases[$name]}"
+            local display="${aliases[$name]}" port_suffix=""
+            if [[ "$display" == *"|"* ]]; then
+                port_suffix=" ${BLUE}[port ${display##*|}]${NC}"
+                display="${display%|*}"
+            fi
+            echo -e "  ${GREEN}${name}${NC} -> ${display}${port_suffix}"
         done
     fi
     echo
@@ -180,8 +192,10 @@ list_all() {
 cmd_ssh() {
     local alias_name="${1:?Usage: meng ssh <alias>}"
     resolve_alias "$alias_name"
-    log_info "Connecting to $USER@$HOST..."
-    ssh "$USER@$HOST"
+    log_info "Connecting to $USER@$HOST${PORT:+ (port $PORT)}..."
+    local ssh_opts=()
+    [[ -n "$PORT" ]] && ssh_opts+=(-p "$PORT")
+    ssh "${ssh_opts[@]}" "$USER@$HOST"
 }
 
 cmd_scp() {
@@ -214,9 +228,10 @@ cmd_scp() {
         [[ ! -f "$file" ]] && { log_error "File '$file' not found"; exit 1; }
     fi
 
-    log_info "Copying '$file' -> $USER@$HOST:$REMOTE_PATH"
+    log_info "Copying '$file' -> $USER@$HOST:$REMOTE_PATH${PORT:+ (port $PORT)}"
     local scp_opts=()
     [[ "$recursion" == true ]] && scp_opts+=(-r)
+    [[ -n "$PORT" ]] && scp_opts+=(-P "$PORT")
     if scp "${scp_opts[@]}" "$file" "$USER@$HOST:$REMOTE_PATH"; then
         log_success "Copied successfully"
     else
@@ -240,8 +255,10 @@ cmd_deploy() {
     fi
     log_success "Build completed"
 
-    log_info "Deploying '$file' -> $alias_name ($USER@$HOST:$REMOTE_PATH)"
-    if scp "$file" "$USER@$HOST:$REMOTE_PATH"; then
+    log_info "Deploying '$file' -> $alias_name ($USER@$HOST:$REMOTE_PATH${PORT:+ port $PORT})"
+    local scp_opts=()
+    [[ -n "$PORT" ]] && scp_opts+=(-P "$PORT")
+    if scp "${scp_opts[@]}" "$file" "$USER@$HOST:$REMOTE_PATH"; then
         log_success "Deployed!"
     else
         log_error "Deployment failed"; exit 1
@@ -255,6 +272,7 @@ cmd_info() {
     echo "  User:   $USER"
     echo "  Host:   $HOST"
     echo "  Path:   $REMOTE_PATH"
+    [[ -n "$PORT" ]] && echo "  Port:   $PORT"
 }
 
 # ########### #
@@ -298,14 +316,24 @@ cmd_script() {
 # ################ #
 
 cmd_add() {
-    local name="${1:?Usage: meng add <name> <user@host:/path>}"
-    local target="${2:?Usage: meng add <name> <user@host:/path>}"
+    local name="${1:?Usage: meng add <name> <user@host:/path> [-p <port>]}"
+    local target="${2:?Usage: meng add <name> <user@host:/path> [-p <port>]}"
     if [[ ! "$target" =~ .+@.+: ]]; then
         log_error "Invalid format. Expected: user@host:/path (e.g. admin@10.0.0.1:/opt/app/)"
         exit 1
     fi
-    write_entry "$ALIASES_FILE" "$name" "$target"
-    log_success "Added '$name' -> $target"
+    shift 2
+    local port=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--port) port="$2"; shift 2 ;;
+            *) log_error "Unknown option: $1"; exit 1 ;;
+        esac
+    done
+    local entry="$target"
+    [[ -n "$port" ]] && entry="${target}|${port}"
+    write_entry "$ALIASES_FILE" "$name" "$entry"
+    log_success "Added '$name' -> $target${port:+ (port $port)}"
 }
 
 cmd_remove() {
@@ -338,11 +366,12 @@ cmd_ingest() {
 
     [[ "${1:-}" == "ssh" ]] && shift
 
-    # Strip SSH flags (-p 22, -i keyfile, etc.)
-    local connection=""
+    # Parse SSH flags; capture -p as port, strip everything else
+    local connection="" port=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -p|-i|-l|-o|-J|-b|-c|-D|-E|-F|-I|-L|-m|-Q|-R|-S|-w|-W) shift 2 ;;
+            -p) port="$2"; shift 2 ;;
+            -i|-l|-o|-J|-b|-c|-D|-E|-F|-I|-L|-m|-Q|-R|-S|-w|-W) shift 2 ;;
             -*) shift ;;
             *) connection="$1"; break ;;
         esac
@@ -362,8 +391,10 @@ cmd_ingest() {
         user_host="${USER}@${user_host}"
     fi
 
-    write_entry "$ALIASES_FILE" "$alias_name" "${user_host}:${path}"
-    log_success "Ingested '$alias_name' -> ${user_host}:${path}"
+    local entry="${user_host}:${path}"
+    [[ -n "$port" ]] && entry="${entry}|${port}"
+    write_entry "$ALIASES_FILE" "$alias_name" "$entry"
+    log_success "Ingested '$alias_name' -> ${user_host}:${path}${port:+ (port $port)}"
     log_info "Connect with: meng ssh $alias_name"
 }
 

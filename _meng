@@ -44,6 +44,9 @@ _meng() {
         ssh|info|remove)
             (( CURRENT == 3 )) && compadd -a aliases
             ;;
+        add)
+            (( CURRENT == 4 )) && compadd -- -p
+            ;;
         scp|deploy)
             case $CURRENT in
                 3) compadd -a aliases ;;

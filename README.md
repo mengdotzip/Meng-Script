@@ -58,11 +58,18 @@ unfunction _meng 2>/dev/null; autoload -Uz _meng
 # save a server
 meng add prod admin@192.168.1.100:/opt/app/
 
+# save a server with a custom SSH port
+meng add staging admin@192.168.1.100:/opt/app/ -p 2222
+
 # or just SSH in normally, then save it after
 ssh admin@192.168.1.100
 meng ingest prod !!
 
-# connect / copy / deploy
+# ingest an SSH command that uses a custom port
+ssh -p 2222 admin@192.168.1.100
+meng ingest staging !!
+
+# connect / copy / deploy (port is used automatically)
 meng ssh    prod
 meng scp    prod build/myapp
 meng scp    prod dist/ -r
@@ -94,7 +101,7 @@ meng scp <alias> <file> [-r] [-p <path>]
 meng deploy <alias> <file>
 meng info <alias>
 
-meng add <name> <user@host:/path>
+meng add <name> <user@host:/path> [-p <port>]
 meng remove <name>
 meng ingest <name> [ssh] <user@host>
 meng list
@@ -104,5 +111,6 @@ meng script add <name> <path>
 meng script remove <name>
 
 ```
-> `-p` with a leading `/` replaces the alias path entirely, without one it appends to it.
+> `-p` on `scp` with a leading `/` replaces the alias path entirely, without one it appends to it.
+> `-p <port>` on `add` sets a custom SSH/SCP port, stored in the alias and applied automatically.
 > `deploy` assumes a Go project and runs `go build` first.
