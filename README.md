@@ -79,6 +79,15 @@ meng deploy prod myapp
 meng script add backup ~/scripts/rclone_backup.sh
 meng run backup
 
+# scripts with parameters
+#  - store fixed default args, add more at call time:
+meng script add setup-env ~/scripts/setup-code-env.sh vscode-box
+meng run setup-env                      # runs: setup-code-env.sh vscode-box
+meng run setup-env remcsc               # runs: setup-code-env.sh vscode-box remcsc
+#  - need the call-time args somewhere other than the end? use a {} placeholder:
+meng script add setup-env ~/scripts/setup-code-env.sh --box vscode-box {} --verbose
+meng run setup-env remcsc               # runs: setup-code-env.sh --box vscode-box remcsc --verbose
+
 # see everything
 meng list
 ```
@@ -106,11 +115,12 @@ meng remove <name>
 meng ingest <name> [ssh] <user@host>
 meng list
 
-meng run <name>
-meng script add <name> <path>
+meng run <name> [args...]
+meng script add <name> <path> [args...]
 meng script remove <name>
 
 ```
 > `-p` on `scp` with a leading `/` replaces the alias path entirely, without one it appends to it.
 > `-p <port>` on `add` sets a custom SSH/SCP port, stored in the alias and applied automatically.
+> `run` appends any args you pass after the script's stored default args; a `{}` placeholder in the stored args is replaced by them instead. Scripts run via their own shebang (or `sh` if they have none).
 > `deploy` assumes a Go project and runs `go build` first.

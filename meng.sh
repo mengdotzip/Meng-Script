@@ -16,7 +16,7 @@ readonly BLUE=$'\033[0;34m'
 readonly NC=$'\033[0m'
 
 readonly DEFAULT_FILE=""
-readonly VERSION="0.4.0"
+readonly VERSION="0.5.1"
 
 log_info()    { echo -e "${BLUE}i${NC} $1"; }
 log_success() { echo -e "${GREEN}✓${NC} $1"; }
@@ -67,8 +67,8 @@ ${YELLOW}SERVER:${NC}
   ${GREEN}info${NC}   <alias>                      Show alias details
 
 ${YELLOW}SCRIPTS:${NC}
-  ${GREEN}run${NC}           <name>                Run a script alias
-  ${GREEN}script add${NC}    <name> <path>         Add a script alias
+  ${GREEN}run${NC}           <name> [args...]      Run a script (args appended after stored defaults)
+  ${GREEN}script add${NC}    <name> <path> [args]  Add a script alias with optional default args
   ${GREEN}script remove${NC} <name>                Remove a script alias
 
 ${YELLOW}ALIAS MANAGEMENT:${NC}
@@ -93,7 +93,9 @@ ${YELLOW}EXAMPLES:${NC}
   meng scp prod myapp -p /tmp/
   meng deploy prod myapp
   meng run backup
+  meng run setup-env vscode-box Meng-Script   # pass args at call time
   meng script add backup ~/scripts/backup.sh
+  meng script add setup-env ~/scripts/setup-code-env.sh vscode-box Meng-Script
   meng list
 EOF
 }
@@ -157,7 +159,13 @@ resolve_script() {
         log_info "Run 'meng list' to see available scripts"
         exit 1
     fi
-    SCRIPT_PATH="${scripts[$name]}"
+    local full="${scripts[$name]}"
+    SCRIPT_ARGS=""
+    if [[ "$full" == *"|"* ]]; then
+        SCRIPT_ARGS="${full##*|}"
+        full="${full%|*}"
+    fi
+    SCRIPT_PATH="$full"
 }
 
 list_all() {
@@ -180,7 +188,12 @@ list_all() {
         echo -e "  ${BLUE}(none)${NC} — add with: meng script add <name> <path>"
     else
         for name in "${!scripts[@]}"; do
-            echo -e "  ${GREEN}${name}${NC} -> ${scripts[$name]}"
+            local display="${scripts[$name]}" args_suffix=""
+            if [[ "$display" == *"|"* ]]; then
+                args_suffix=" ${BLUE}[args ${display##*|}]${NC}"
+                display="${display%|*}"
+            fi
+            echo -e "  ${GREEN}${name}${NC} -> ${display}${args_suffix}"
         done
     fi
 }
@@ -280,11 +293,55 @@ cmd_info() {
 # ########### #
 
 cmd_run() {
-    local name="${1:?Usage: meng run <script>}"
+    local name="${1:?Usage: meng run <script> [args...]}"
     resolve_script "$name"
-    log_info "Running '$name'..."
-    sh "$SCRIPT_PATH"
+    shift
+
+    # Stored default args run first; the args passed here are appended after.
+    # A {} placeholder in the stored args is replaced by the passed args
+    # instead, so they can land somewhere other than the end.
+    local stored=() run_args=() a
+    [[ -n "$SCRIPT_ARGS" ]] && read -ra stored <<< "$SCRIPT_ARGS"
+
+    local has_placeholder=false
+    for a in ${stored[@]+"${stored[@]}"}; do
+        [[ "$a" == "{}" ]] && { has_placeholder=true; break; }
+    done
+
+    if [[ "$has_placeholder" == true ]]; then
+        for a in "${stored[@]}"; do
+            if [[ "$a" == "{}" ]]; then
+                run_args+=("$@")
+            else
+                run_args+=("$a")
+            fi
+        done
+    else
+        run_args=(${stored[@]+"${stored[@]}"} "$@")
+    fi
+
+    log_info "Running '$name'${run_args[*]:+ ${run_args[*]}}..."
+    run_script "$SCRIPT_PATH" ${run_args[@]+"${run_args[@]}"}
     log_success "Script completed"
+}
+
+# Run a script honoring its own interpreter rather than forcing sh:
+#   - executable file  -> run directly (kernel reads the shebang)
+#   - has a #! line     -> invoke that interpreter explicitly
+#   - otherwise         -> fall back to sh
+run_script() {
+    local path="$1"; shift
+    if [[ -x "$path" ]]; then
+        "$path" "$@"
+        return
+    fi
+    local shebang=""
+    IFS= read -r shebang < "$path" 2>/dev/null || true
+    if [[ "$shebang" == '#!'* ]]; then
+        ${shebang#\#!} "$path" "$@"
+    else
+        sh "$path" "$@"
+    fi
 }
 
 cmd_script() {
@@ -292,11 +349,14 @@ cmd_script() {
     shift
     case "$subcmd" in
         add)
-            local name="${1:?Usage: meng script add <name> <path>}"
-            local path="${2:?Usage: meng script add <name> <path>}"
+            local name="${1:?Usage: meng script add <name> <path> [args...]}"
+            local path="${2:?Usage: meng script add <name> <path> [args...]}"
+            shift 2
             [[ ! -f "$path" ]] && log_warning "Script '$path' does not exist yet (adding anyway)"
-            write_entry "$SCRIPTS_FILE" "$name" "$path"
-            log_success "Script '$name' -> $path"
+            local entry="$path"
+            [[ $# -gt 0 ]] && entry="${path}|$*"
+            write_entry "$SCRIPTS_FILE" "$name" "$entry"
+            log_success "Script '$name' -> $path${*:+ (args: $*)}"
             ;;
         remove)
             local name="${1:?Usage: meng script remove <name>}"
